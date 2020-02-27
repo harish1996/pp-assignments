@@ -62,51 +62,20 @@ void generate_notso_random_matrix( float *A, int size )
 		generate_symmetric_matrix( A, size );
 }
 
-/**
- * Parallel routine for checking whether the matrix is symmetric
- * Divides the work of checking symmetricity by allocating processors for each element in
- * in the bottom triangle of the matrix.
- */
-__global__ void par_is_symmetric( float* A, bool* is_transpose, int size )
+__global__ void par_is_symmetric( float *A, bool* is_transpose, int size )
 {
-	int c = blockIdx.x * blockDim.x + threadIdx.x;
-	int r = blockIdx.y * blockDim.y + threadIdx.y;
-	int actual_row,actual_column;
-	int max_row = size / 2 + ( size % 2 == 0?0:1 );
-
-	if( !is_transpose ){
+	if( !(*is_transpose) ){
 		return;
-	}
-
-	if( (r < max_row) || (r == max_row && size%2 == 0) ){
-		if( c < r ){
-			actual_row = r;
-		       	actual_column = c;
-		}
-		else if(c < size-1){
-			actual_row = size -1- r;
-			actual_column = c - r;
-		}
-		else{
-			return;
-		}
-	}
-	else if( r == max_row ){
-		if( c < r ){
-			actual_row = r;
-			actual_column = c;
-		}
-		else
-			return;
 	}
 	else{
-		return;
+		register int c = blockIdx.x * blockDim.x + threadIdx.x;
+		register int r = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		if( c >= size || r >= size ) return;
+		if( A[ r*size + c ] != A[ c*size + r ] )
+			*is_transpose = false;
 	}
-	
-	if( A[ actual_row*size + actual_column ] != A[ actual_column*size + actual_row ] )
-		*is_transpose = false;
 }
-
 
 /**
  * Sequential matrix symmetricity checking function
@@ -131,10 +100,10 @@ int main( int argc, char* argv[] )
 	float *A;
 	float *ga;
 
-	int size,size_x;	/* Size of the matrix */
+	int size;	/* Size of the matrix */
 	int matrix_size;	/* Physical size of the matrix in the memory */
 	
-	int num_blocks_x,num_blocks_y;		
+	int num_blocks;		
 	
 	cudaEvent_t start,stop;
 	
@@ -182,10 +151,10 @@ int main( int argc, char* argv[] )
 	  *******************/
 	cudaEventRecord(start);
 
-	size_t freev,totalv;
+	//size_t freev,totalv;
 	status = cudaMalloc( &ga, sizeof(float)* size * size );
-	cudaMemGetInfo( &freev, &totalv );
-	printf("Free= %lu, total=%lu\n",freev,totalv);
+	//cudaMemGetInfo( &freev, &totalv );
+	//printf("Free= %lu, total=%lu\n",freev,totalv);
 	CHECK_STATUS(status);
 
 	status = cudaMalloc( &g_is_symmetric, sizeof(bool) );
@@ -197,12 +166,10 @@ int main( int argc, char* argv[] )
 	status = cudaMemcpy( g_is_symmetric, &is_symmetric, sizeof(bool), cudaMemcpyHostToDevice );
 	CHECK_STATUS(status);
 
-	size_x = (((size-1)/2) + 1);
-	num_blocks_x = (size_x-1)/dim_thread + 1;
-	num_blocks_y = (size-2)/dim_thread + 1;
+	num_blocks = ( size - 1 )/dim_thread + 1;
 
 	dim3 grid( dim_thread, dim_thread );
-	dim3 blocks( num_blocks_x, num_blocks_y);
+	dim3 blocks( num_blocks, num_blocks);
 	
 	par_is_symmetric<<<blocks,grid>>> (ga, g_is_symmetric, size);
 	
