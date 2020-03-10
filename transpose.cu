@@ -6,6 +6,9 @@
  * 	Compile using nvcc -lcudart transpose.cu -o transpose
  *	Run using ./mat <size of the matrix>
  *
+ * Notes:
+ * 	Uncomment line number 157, if you try to run it in CSSC's computation
+ *	server
  * Example:
  *	./mat 153
  *	The above will check whether for a random matrix, A = transpose(A)
@@ -16,7 +19,11 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define CHECK_STATUS(status)	if( status != cudaSuccess ){ fprintf(stderr,"Error at %d\n",__LINE__); return -1; }
+#ifndef __CUDA_SAFE_CALL
+#define __CUDA_SAFE_CALL(call) do { cudaError_t cuda_error = call; if(cuda_error != cudaSuccess) { std::cerr << "CUDA Error: " << cudaGetErrorString(cuda_error) << ", " << __FILE__ << ", line " << __LINE__ << std::endl; return -1;} } while(0)
+#endif
+
+#define CHECK_STATUS(status)	if( status != cudaSuccess ){ fprintf(stderr,"Cuda function failed with status %d at line %d\n",status,__LINE__); return -1; }
 
 void generate_assymmetric_matrix( float *A, int size, float assymmetricity )
 {
@@ -68,8 +75,8 @@ __global__ void par_is_symmetric( float *A, bool* is_transpose, int size )
 		return;
 	}
 	else{
-		register int c = blockIdx.x * blockDim.x + threadIdx.x;
-		register int r = blockIdx.y * blockDim.y + threadIdx.y;
+		int c = blockIdx.x * blockDim.x + threadIdx.x;
+		int r = blockIdx.y * blockDim.y + threadIdx.y;
 		
 		if( c >= size || r >= size ) return;
 		if( A[ r*size + c ] != A[ c*size + r ] )
@@ -142,19 +149,24 @@ int main( int argc, char* argv[] )
 	bool *g_is_symmetric;
 	cudaError_t status;
 
+
+	/* Uncomment the below line to run this code in CSSC Computation server.
+	   CSSC's 0th device is always occupied and fails to allocate any size of
+	   memory consistently.
+	*/
+	//cudaSetDevice(2);
+
 	/* Timers to time the parallel process */ 
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 
 	/*********************
-	  * Start of GPU run
-	  *******************/
+	 * Start of GPU run
+	 *******************/
 	cudaEventRecord(start);
 
-	//size_t freev,totalv;
+
 	status = cudaMalloc( &ga, sizeof(float)* size * size );
-	//cudaMemGetInfo( &freev, &totalv );
-	//printf("Free= %lu, total=%lu\n",freev,totalv);
 	CHECK_STATUS(status);
 
 	status = cudaMalloc( &g_is_symmetric, sizeof(bool) );
@@ -187,18 +199,7 @@ int main( int argc, char* argv[] )
 	char *msg;
 	msg = is_symmetric ? (char *)"Symmetric":(char *)"Not Symmetric";
 	printf("The given matrix is %s\n",msg);
-	//printf("Time taken %5.7f milliseconds\n",milliseconds);
 	
-//	if( do_print ){	
-//		printf("C=\n");
-//		for( int i=0; i<size; i++ ){
-//			for( int j=0; j<size; j++ ){
-//				printf("%d ",checked[i*size + j]);
-//			}
-//			printf("\n");
-//		}
-//	}
-
 	cudaFree( ga );
 	
 	/*********************
