@@ -21,42 +21,45 @@ cudaError_t __cuda_error;
 #define __CUDA_SAFE_CALL(call) do { __cuda_error = call; if(__cuda_error != cudaSuccess) { fprintf(stderr,"CUDA Error: %s,%s, line %d\n",cudaGetErrorString(__cuda_error), __FILE__, __LINE__ ); return -1;} } while(0)
 #endif
 
-void generate_random_vector( float *A, int size )
+void generate_random_vector( double *A, int size )
 {
 	srand( time(NULL) );
 
 	for( int i=0; i<size; i++ )
-		A[i] = 1.2;
-		//A[i] = ((float)rand())/100000;
+		//A[i] = 1.2;
+		A[i] = ((double)rand())/100000;
 }
 
-#define THREADS_PER_BLOCK 1024
-#define TPB THREADS_PER_BLOCK
-
-__device__ void addfour( float *A, int id, int threads, float *B )
+__device__ void addfour( volatile double *A, int id, int threads, volatile double *B )
 {
 	B[id] = A[id] + A[threads+id] + A[2*threads + id] + A[3*threads+id];
 }
 
-__global__ void add4096( float *A, float *B )
+__global__ void add4096( double *A, double *B, int size )
 {
-	__shared__ float nums[4096];
+	__shared__ double nums[256];
 	int id = blockIdx.x;
 	int tid = threadIdx.x;
 	int offset = 4096*id;
-	int alive = 1024;
-
-	nums[        tid ] = A[offset +        tid ];
-	nums[ 1024 + tid ] = A[offset + 1024 + tid ];
-	nums[ 2048 + tid ] = A[offset + 2048 + tid ];
-	nums[ 3072 + tid ] = A[offset + 3072 + tid ];
+	int alive = blockDim.x;
+	int this_block = ( size - offset >= 4096 )? 4096: size - offset;
+	int intra_offset = 0;
+	
+	nums[tid] = 0;
+	
+	while( intra_offset < this_block ){
+		if( intra_offset + tid < this_block )
+			nums[tid] += A[ offset + intra_offset + tid ];
+	       	intra_offset += alive;
+	}	
 
 	__syncthreads();
-
+	
+	alive = alive >> 2;
 	while( 1 ){
 		if( tid < alive ){
-			addfour( (float *)&nums, tid, alive, (float *)&nums );
-			printf("total alive=%d i=%d, %5.2f\n",alive,tid,nums[tid]);
+			addfour( (double *)&nums, tid, alive, (double *)&nums );
+			//printf(" id=%d total alive=%d tid=%d, %5.2f\n",id,alive,tid,nums[tid]);
 		}
 		if( alive == 1 )
 			break;
@@ -67,12 +70,40 @@ __global__ void add4096( float *A, float *B )
 	B[id] = nums[0];
 }
 
-float additall( float* A, int size )
+double padd(double *A, int size)
+{
+	double *ga,*gb;
+	int vector_size = sizeof(double) * size;
+	int num_blocks = ( ((size - 1) / 4096) + 1 );
+	int out_vector = sizeof(double)* num_blocks;
+	double ans;
+
+	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
+	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
+
+	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
+	
+	while( size > 1 ){
+		add4096<<<num_blocks,256>>> (ga, gb, size);
+		size = num_blocks;
+		num_blocks = ( ((size - 1) / 4096) + 1 );
+		ga = gb;
+	}
+
+	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
+	
+	cudaFree( ga );
+	cudaFree( gb );
+
+	return ans;
+}
+
+double sadd( double* A, int size )
 {
 	double ans=0;
 	for( int i=0; i< size; i++ ){
 		ans += A[i];
-		printf("%lf \n",ans);
+		//printf("%lf \n",ans);
 	}
 	return ans;
 }
@@ -80,13 +111,10 @@ float additall( float* A, int size )
 int main( int argc, char* argv[] )
 {
 	/* Matrix container pointers */
-	float *A,*B;
-	float *ga,*gb;
+	double *A;
 
 	int size;		/* Number of elements */
 	int vector_size;	/* Physical size of the elements in the memory */
-	
-	int num_blocks;		
 	
 	cudaEvent_t start,stop;
 	
@@ -94,6 +122,7 @@ int main( int argc, char* argv[] )
 	
 	float pms = 0,sms=0;	/* Parallel and sequential times */
 
+	double ans;
 	
 	if( argc != 2 ){
 		fprintf(stderr, "Atleast one argument required. Usage: %s <Side of the matrix>",argv[0]);
@@ -102,17 +131,13 @@ int main( int argc, char* argv[] )
 	
 	/* Get size of the matrix from command line */
 	size = atoi( argv[1] );
-	if( size % 4096 != 0 ){
-		fprintf(stderr, "Please enter a size divisible by 4096\n");
-		return -1;
-	}
 
-	vector_size = sizeof(float)* size;
-	
+	vector_size = sizeof(double)* size;
+		
 	if( size <= 32 ) do_print= true;
 
-	A = (float *) malloc( vector_size );
-	B = (float *) malloc( vector_size / 4096 );
+	A = (double *) malloc( vector_size );
+	//B = (double *) malloc( out_vector );
 
 	generate_random_vector( A, size );
 
@@ -133,19 +158,12 @@ int main( int argc, char* argv[] )
 	  * Start of GPU run
 	  *******************/
 	cudaEventRecord(start);
-
-	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size      ) );
-	__CUDA_SAFE_CALL( cudaMalloc( &gb, vector_size/4096 ) );
-
-	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
-
-	num_blocks = size / 4096 ;
-
-	add4096<<<num_blocks,1024>>> (ga, gb);
-	
-	__CUDA_SAFE_CALL( cudaMemcpy( B, gb, vector_size/4096, cudaMemcpyDeviceToHost ) );
-
 	cudaEventRecord(stop);
+	
+	
+	ans = 0;
+	ans = padd( A, size );
+
 	cudaEventSynchronize(stop);
 	/*****************
 	 * End of GPU code
@@ -153,22 +171,18 @@ int main( int argc, char* argv[] )
 	
 	cudaEventElapsedTime( &pms, start, stop );
 
-	for( int i=0; i< size/4096; i++ )
-		printf(" Partial sums are %5.2f\n",B[i]);
+	printf(" Total sum is %lf\n",ans);
 
-	cudaFree( ga );
-	cudaFree( gb );
 	/*********************
 	 * Sequential Stuff
 	 ********************/
 	struct timespec seq_start,seq_end;
-	float ans;
 
 	/* clock_gettime gets the process specific time spent, as opposed to the system time expended
 	 */
 	clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &seq_start );
 	
-	ans = additall( A, size );	
+	ans = sadd( A, size );	
 
 	clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &seq_end );
 
@@ -176,16 +190,14 @@ int main( int argc, char* argv[] )
 	 * End of Sequential Stuff
 	 ************************/
 
-	printf("Sum is %f\n",ans);
-	//float a = 1.2;
-	//printf("1.2 is %d\n",*(int *)&a);
+	printf("Sum is %lf\n",ans);
+	
 	/* Getting time in milliseconds for comparability */
 	sms = ( (float)seq_end.tv_sec - seq_start.tv_sec )*1000 + ( (float)seq_end.tv_nsec - seq_start.tv_nsec ) / 1000000;
-
+	printf("%12s %12s %12s %12s\n","N","Parallel","Sequential","Speedup");
 	printf("%12d % 12f % 12f % 12f\n",size,pms,sms,sms/pms);
 
 	free(A);
-	free(B);
 }
 
 
