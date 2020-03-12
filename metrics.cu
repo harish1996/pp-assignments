@@ -56,6 +56,80 @@ __device__ void maxfour( volatile double *A, int id, int threads, int size, vola
 	}
 }
 
+__device__ double tmp;
+
+__device__ inline void copyadd( double *A, volatile double *shared_mem, int tid, int offset )
+{
+	shared_mem[tid] += A[ offset ];
+}
+
+__device__ inline void copyaddsquared( double *A, volatile double *shared_mem, int tid, int offset )
+{
+	shared_mem[tid] += A[ offset ] * A[ offset ];
+}
+
+__device__ inline void copymax( double *A, volatile double *shared_mem, int tid, int offset )
+{
+	tmp = A[ offset ];
+	if( shared_mem[tid] < tmp )
+		shared_mem[tid] = tmp;
+}
+
+__device__ void do4096( double *A, double *B, int size, void (*copyfunc)( double*,volatile double*,int,int), void (*accumulate)(volatile double*, int, int, int, volatile double*) )
+{
+	__shared__ double nums[256];
+	int id = blockIdx.x;
+	int tid = threadIdx.x;
+	int offset = 4096*id;
+	int alive = blockDim.x;
+	int this_block = ( size - offset >= 4096 )? 4096: size - offset;
+	int intra_offset = 0;
+	
+	nums[tid] = 0;
+	
+	while( intra_offset < this_block ){
+		if( intra_offset + tid < this_block )
+			//nums[tid] += A[ offset + intra_offset + tid ];
+			copyfunc( A, (volatile double *)&nums, tid, offset + intra_offset + tid );
+	       	intra_offset += alive;
+	}	
+
+	__syncthreads();
+	
+	alive = alive >> 2;
+	this_block = ( this_block >= blockDim.x )? blockDim.x: this_block;
+
+	while( 1 ){
+		if( tid < alive ){
+			accumulate( (double *)&nums, tid, alive, this_block, (double *)&nums );
+			//printf(" id=%d total alive=%d tid=%d, %5.2f\n",id,alive,tid,nums[tid]);
+		}
+		if( alive == 1 )
+			break;
+		this_block = ( this_block >= alive )? alive: this_block;
+		alive = alive>>2;
+		__syncthreads();
+	}
+
+	B[id] = nums[0];
+}
+
+__global__ void add4096( double *A, double *B, int size )
+{
+	do4096( A, B, size, copyadd, addfour );
+}
+
+__global__ void addsquared4096( double *A, double *B, int size )
+{
+	do4096( A, B, size, copyaddsquared, addfour );
+}
+
+__global__ void max4096( double *A, double *B, int size )
+{
+	do4096( A, B, size, copymax, maxfour );
+}
+
+/*
 __global__ void add4096( double *A, double *B, int size )
 {
 	__shared__ double nums[256];
@@ -70,7 +144,8 @@ __global__ void add4096( double *A, double *B, int size )
 	
 	while( intra_offset < this_block ){
 		if( intra_offset + tid < this_block )
-			nums[tid] += A[ offset + intra_offset + tid ];
+			//nums[tid] += A[ offset + intra_offset + tid ];
+			copyadd( A, &nums, tid, offset + intra_offset + tid )
 	       	intra_offset += alive;
 	}	
 
@@ -171,7 +246,51 @@ __global__ void max4096( double *A, double *B, int size )
 
 	B[id] = nums[0];
 }
+*/
+double reduce( double *A, int size, void (*reduce_fn)(double*, double*, int) )
+{
+	double *ga,*gb;
+	int vector_size = sizeof(double) * size;
+	int num_blocks = ( ((size - 1) / 4096) + 1 );
+	int out_vector = sizeof(double)* num_blocks;
+	double ans;
 
+	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
+	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
+
+	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
+	
+	while( size > 1 ){
+		reduce_fn<<<num_blocks,256>>> (ga, gb, size);
+		size = num_blocks;
+		num_blocks = ( ((size - 1) / 4096) + 1 );
+		ga = gb;
+	}
+
+	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
+	
+	cudaFree( ga );
+	cudaFree( gb );
+
+	return ans;
+}
+
+double padd( double *A, int size )
+{
+	return reduce( A, size, add4096 );
+}
+
+double psquareadd( double *A, int size )
+{
+	return reduce( A, size, addsquared4096 );
+}
+
+double pmax( double *A, int size )
+{
+	return reduce( A, size, max4096 );
+}
+
+/*
 double padd(double *A, int size)
 {
 	double *ga,*gb;
@@ -255,7 +374,7 @@ double pmax(double *A, int size )
 
 	return ans;
 }
-
+*/
 
 double pmean( double *A, int size )
 {
