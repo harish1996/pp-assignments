@@ -31,7 +31,7 @@ void generate_random_vector( double *A, int size )
 		A[i] = ((double)rand())/100000;
 }
 
-__device__ void addfour( volatile double *A, int id, int threads, int size, volatile double *B )
+__device__ inline void addfour( volatile double *A, int id, int threads, int size, volatile double *B )
 {
 	int index=threads+id;
 	for( int i=0; i<3; i++ ){
@@ -43,7 +43,7 @@ __device__ void addfour( volatile double *A, int id, int threads, int size, vola
 	}
 }
 
-__device__ void maxfour( volatile double *A, int id, int threads, int size, volatile double *B )
+__device__ inline void maxfour( volatile double *A, int id, int threads, int size, volatile double *B )
 {
 	int index=threads+id;
 	for( int i=0; i<3; i++ ){
@@ -89,7 +89,6 @@ __device__ void do4096( double *A, double *B, int size, void (*copyfunc)( double
 	
 	while( intra_offset < this_block ){
 		if( intra_offset + tid < this_block )
-			//nums[tid] += A[ offset + intra_offset + tid ];
 			copyfunc( A, (volatile double *)&nums, tid, offset + intra_offset + tid );
 	       	intra_offset += alive;
 	}	
@@ -129,131 +128,15 @@ __global__ void max4096( double *A, double *B, int size )
 	do4096( A, B, size, copymax, maxfour );
 }
 
-/*
-__global__ void add4096( double *A, double *B, int size )
-{
-	__shared__ double nums[256];
-	int id = blockIdx.x;
-	int tid = threadIdx.x;
-	int offset = 4096*id;
-	int alive = blockDim.x;
-	int this_block = ( size - offset >= 4096 )? 4096: size - offset;
-	int intra_offset = 0;
-	
-	nums[tid] = 0;
-	
-	while( intra_offset < this_block ){
-		if( intra_offset + tid < this_block )
-			//nums[tid] += A[ offset + intra_offset + tid ];
-			copyadd( A, &nums, tid, offset + intra_offset + tid )
-	       	intra_offset += alive;
-	}	
-
-	__syncthreads();
-	
-	alive = alive >> 2;
-	this_block = ( this_block >= blockDim.x )? blockDim.x: this_block;
-
-	while( 1 ){
-		if( tid < alive ){
-			addfour( (double *)&nums, tid, alive, this_block, (double *)&nums );
-			//printf(" id=%d total alive=%d tid=%d, %5.2f\n",id,alive,tid,nums[tid]);
-		}
-		if( alive == 1 )
-			break;
-		this_block = ( this_block >= alive )? alive: this_block;
-		alive = alive>>2;
-		__syncthreads();
-	}
-
-	B[id] = nums[0];
-}
-
-__global__ void addsquared4096( double *A, double *B, int size )
-{
-	__shared__ double nums[256];
-	int id = blockIdx.x;
-	int tid = threadIdx.x;
-	int offset = 4096*id;
-	int alive = blockDim.x;
-	int this_block = ( size - offset >= 4096 )? 4096: size - offset;
-	int intra_offset = 0;
-	
-	nums[tid] = 0;
-	
-	while( intra_offset < this_block ){
-		if( intra_offset + tid < this_block )
-			nums[tid] += A[ offset + intra_offset + tid ] * A[ offset + intra_offset + tid ];
-	       	intra_offset += alive;
-	}	
-
-	__syncthreads();
-	
-	alive = alive >> 2;
-	this_block = ( this_block >= blockDim.x )? blockDim.x: this_block;
-	while( 1 ){
-		if( tid < alive ){
-			addfour( (double *)&nums, tid, alive, this_block, (double *)&nums );
-			//printf(" id=%d total alive=%d tid=%d, %5.2f\n",id,alive,tid,nums[tid]);
-		}
-		if( alive == 1 )
-			break;
-		this_block = ( this_block >= alive )? alive: this_block;
-		alive = alive>>2;
-		__syncthreads();
-	}
-
-	B[id] = nums[0];
-}
-
-__global__ void max4096( double *A, double *B, int size )
-{
-	__shared__ double nums[256];
-	int id = blockIdx.x;
-	int tid = threadIdx.x;
-	int offset = 4096*id;
-	int alive = blockDim.x;
-	int this_block = ( size - offset >= 4096 )? 4096: size - offset;
-	int intra_offset = 0;
-	int tmp;
-
-	nums[tid] = -1;
-	
-	while( intra_offset < this_block ){
-		if( intra_offset + tid < this_block ){
-			tmp = A[ offset + intra_offset + tid ];
-			if( nums[tid] < tmp )
-				nums[tid] = tmp;
-		}
-	       	intra_offset += alive;
-	}	
-
-	__syncthreads();
-	
-	alive = alive >> 2;
-	this_block = ( this_block >= blockDim.x )? blockDim.x: this_block;
-	while( 1 ){
-		if( tid < alive ){
-			maxfour( (double *)&nums, tid, alive, this_block, (double *)&nums );
-			//printf(" id=%d total alive=%d tid=%d, %5.2f\n",id,alive,tid,nums[tid]);
-		}
-		if( alive == 1 )
-			break;
-		this_block = ( this_block >= alive )? alive: this_block;
-		alive = alive>>2;
-		__syncthreads();
-	}
-
-	B[id] = nums[0];
-}
-*/
-double reduce( double *A, int size, void (*reduce_fn)(double*, double*, int) )
+double reduce( double *A, int size, void (*reduce_fn1)(double*, double*, int), void (*reduce_fn2)(double*, double*, int) )
 {
 	double *ga,*gb;
 	int vector_size = sizeof(double) * size;
 	int num_blocks = ( ((size - 1) / 4096) + 1 );
 	int out_vector = sizeof(double)* num_blocks;
 	double ans;
+	void (*reduce)(double*, double*, int) = reduce_fn1;
+
 
 	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
 	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
@@ -261,10 +144,11 @@ double reduce( double *A, int size, void (*reduce_fn)(double*, double*, int) )
 	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
 	
 	while( size > 1 ){
-		reduce_fn<<<num_blocks,256>>> (ga, gb, size);
+		reduce<<<num_blocks,256>>> (ga, gb, size);
 		size = num_blocks;
 		num_blocks = ( ((size - 1) / 4096) + 1 );
 		ga = gb;
+		reduce = reduce_fn2;
 	}
 
 	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
@@ -277,104 +161,18 @@ double reduce( double *A, int size, void (*reduce_fn)(double*, double*, int) )
 
 double padd( double *A, int size )
 {
-	return reduce( A, size, add4096 );
+	return reduce( A, size, add4096, add4096 );
 }
 
 double psquareadd( double *A, int size )
 {
-	return reduce( A, size, addsquared4096 );
+	return reduce( A, size, addsquared4096, add4096 );
 }
 
 double pmax( double *A, int size )
 {
-	return reduce( A, size, max4096 );
+	return reduce( A, size, max4096, max4096 );
 }
-
-/*
-double padd(double *A, int size)
-{
-	double *ga,*gb;
-	int vector_size = sizeof(double) * size;
-	int num_blocks = ( ((size - 1) / 4096) + 1 );
-	int out_vector = sizeof(double)* num_blocks;
-	double ans;
-
-	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
-	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
-
-	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
-	
-	while( size > 1 ){
-		add4096<<<num_blocks,256>>> (ga, gb, size);
-		size = num_blocks;
-		num_blocks = ( ((size - 1) / 4096) + 1 );
-		ga = gb;
-	}
-
-	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
-	
-	cudaFree( ga );
-	cudaFree( gb );
-
-	return ans;
-}
-
-double psquareadd(double *A, int size )
-{
-	double *ga,*gb;
-	int vector_size = sizeof(double) * size;
-	int num_blocks = ( ((size - 1) / 4096) + 1 );
-	int out_vector = sizeof(double)* num_blocks;
-	double ans;
-
-	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
-	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
-
-	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
-	
-	while( size > 1 ){
-		addsquared4096<<<num_blocks,256>>> (ga, gb, size);
-		size = num_blocks;
-		num_blocks = ( ((size - 1) / 4096) + 1 );
-		ga = gb;
-	}
-
-	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
-	
-	cudaFree( ga );
-	cudaFree( gb );
-
-	return ans;
-}
-
-double pmax(double *A, int size )
-{
-	double *ga,*gb;
-	int vector_size = sizeof(double) * size;
-	int num_blocks = ( ((size - 1) / 4096) + 1 );
-	int out_vector = sizeof(double)* num_blocks;
-	double ans;
-
-	__CUDA_SAFE_CALL( cudaMalloc( &ga, vector_size ) );
-	__CUDA_SAFE_CALL( cudaMalloc( &gb, out_vector  ) );
-
-	__CUDA_SAFE_CALL( cudaMemcpy( ga, A, vector_size, cudaMemcpyHostToDevice ) );
-	
-	while( size > 1 ){
-		max4096<<<num_blocks,256>>> (ga, gb, size);
-		size = num_blocks;
-		num_blocks = ( ((size - 1) / 4096) + 1 );
-		ga = gb;
-	}
-
-	__CUDA_SAFE_CALL( cudaMemcpy( &ans, gb, sizeof(double) , cudaMemcpyDeviceToHost ) );
-	
-	cudaFree( ga );
-	cudaFree( gb );
-
-	return ans;
-}
-*/
 
 double pmean( double *A, int size )
 {
@@ -397,7 +195,25 @@ double sadd( double* A, int size )
 	double ans=0;
 	for( int i=0; i< size; i++ ){
 		ans += A[i];
-		//printf("%lf \n",ans);
+	}
+	return ans;
+}
+
+double ssquaredadd( double *A, int size )
+{
+	double ans = 0;
+	for( int i=0; i< size; i++ ){
+		ans += A[i]*A[i];
+	}
+	return ans;
+}
+
+double smax( double *A, int size )
+{
+	double ans = -1;
+	for( int i=0; i< size; i++ ){
+		if( A[i] > ans )
+			ans = A[i];
 	}
 	return ans;
 }
@@ -407,6 +223,14 @@ double smean( double *A, int size )
 	double ans;
 	ans = sadd( A, size );
 	return ans/size;
+}
+
+double sstd( double *A, int size )
+{
+	double mean, sqsum;
+	mean = smean( A, size );
+	sqsum = ssquaredadd( A, size ) / size;
+	return sqrt( sqsum - (mean*mean) );
 }
 
 int main( int argc, char* argv[] )
@@ -489,6 +313,8 @@ int main( int argc, char* argv[] )
 	clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &seq_start );
 	
 	mean = smean( A, size );	
+	std = sstd( A, size );
+	max = smax( A, size );
 
 	clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &seq_end );
 
@@ -497,7 +323,9 @@ int main( int argc, char* argv[] )
 	 ************************/
 
 	printf("Mean is %lf\n",mean);
-	
+	printf("Std is %lf\n",std);
+	printf("Max is %lf\n",max);
+
 	/* Getting time in milliseconds for comparability */
 	sms = ( (float)seq_end.tv_sec - seq_start.tv_sec )*1000 + ( (float)seq_end.tv_nsec - seq_start.tv_nsec ) / 1000000;
 	printf("%12s %12s %12s %12s\n","N","Parallel","Sequential","Speedup");
