@@ -11,10 +11,10 @@ void generate_assymmetric_matrix( float *A, int size, float assymmetricity )
 	
 	for( int i=0; i<size; i++ ){
 		for( int j=0; j<=i; j++ ){
-			A[i*size + j] = (float)rand() / 10;
+			A[i*size + j] = (float)(rand() % 10);
 			r = (float)( (rand()%30000) * 10 ) / 30000 ;
 		      	if ( r < assymmetricity ){
-				A[ j*size + i ] = (float)rand() / 10;
+				A[ j*size + i ] = (float)(rand() % 10);
 				//printf("%f %d %d\n",r,i,j);
 			}
 			else	
@@ -30,7 +30,7 @@ void generate_symmetric_matrix( float *A, int size )
 	
 	for( int i=0; i<size; i++ ){
 		for( int j=0; j<=i; j++ ){
-			A[i*size + j] = rand() / 10;
+			A[i*size + j] = rand() % 10;
 			A[j*size + i] = A[i*size + j];
 		}
 	}
