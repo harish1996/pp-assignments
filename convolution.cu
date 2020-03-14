@@ -1,17 +1,17 @@
 /************************************************
- * MATRIX MULTIPLICATION and ADDITION.
- * 	Checking which is faster (A+B)^2 or ( A^2 + AB + BA + B^2 )
+ * 2D Convolution
+ *	2D convolution of an arbitrary image matrix and an arbitrary filter. 	 
  *
  * Usage:
- * 	Compile using nvcc -lcudart random_gens.c matrix_kernels.cu matrixmul.cu -o matrixmul
- *	Run using ./matrixmul <size of the matrix>
+ * 	Compile using nvcc -lcudart random_gens.cu convolution.cu -o problem4
+ *	Run using ./problem4 <Size of the image> <Size of the filter>
  *
  * Notes:
  * 	Uncomment line number 157, if you try to run it in CSSC's computation
  *	server
  *
  * Example:
- *	./mat 153
+ *	./problem4 150 5
  *
  ************************************************/ 
 
